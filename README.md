@@ -6,7 +6,7 @@ This example counts how many times the kernel generates **SIGTSTP** (typically t
 
 ### Step 1: Generate `vmlinux.h`
 
-We include `vmlinux.h` because it brings in the kernel’s real type/struct definitions generated from BTF, so the eBPF program can compile and correctly interpret the `ctx` variable in the program. It also enables CO-RE (`BPF_CORE_READ`) to read fields portably across kernel versions.
+We include `vmlinux.h` so the eBPF program knows the kernel’s real struct/type definitions (exported via BTF) and can compile with the correct `ctx` layout (remember: `ctx` is the tracepoint event context: a pointer to the data payload for that event, e.g., it contains fields like the signal number). With that BTF type info available, CO-RE helpers like `BPF_CORE_READ()` can also adapt field accesses across kernel versions, even if struct offsets change.
 
 ```
 bpftool btf dump file /sys/kernel/btf/vmlinux format c > vmlinux.h
