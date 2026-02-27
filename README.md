@@ -40,7 +40,7 @@ sudo bpftool prog load ctrlz_count.bpf.o /sys/fs/bpf/ctrlz/ctrlz_link autoattach
 
 ### Step 5: Read the counter
 
-Dumps the current value stored in the pinned counter map (key 0). Since the eBPF program increments it each time it sees SIGTSTP, this number is the total SIGTSTP events counted since the map was created or last cleared.
+Dumps the current value stored in the pinned counter map. Since the eBPF program increments it each time it sees SIGTSTP, this number is the total SIGTSTP events counted since the map was created.
 
 ```
 sudo bpftool map dump pinned /sys/fs/bpf/ctrlz/counter
