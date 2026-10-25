@@ -1,31 +1,29 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /* Copyright (c) 2026 Humberto VALERA */
-/*
- * bench.h - shared harness for the write() system call benchmarks.
- *
- * Each benchmark program only provides the write strategy under test;
- * option parsing, data generation, timing and reporting live in bench.c.
- * Keep it that way. Both strategies must be measured by the very same
- * code, or the comparison is worthless.
- */
+
+// bench.h: common code for the write() benchmarks.
+//
+// Each program (write_unbuf.c and write_buf.c) only implements its own way
+// of writing the data. Everything else (options, data generation, timing
+// and the report) is in bench.c, so both programs are measured with the
+// same code and the comparison is fair.
+
 #ifndef _BENCH_H
 #define _BENCH_H
 
 #include <stddef.h>
 
-#define ENTRY_SIZE	64		/* bytes per entry, including '\n' */
-#define DEF_BUFSIZE	(64 * 1024)	/* 64 KiB */
-#define DEF_REPS	5
+#define ENTRY_SIZE	64		// bytes per entry, including the '\n'
+#define DEF_BUFSIZE	(64 * 1024)	// default buffer size: 64 KiB
+#define DEF_REPS	5		// default number of repetitions
 
-/**
- * struct bench_test - description of one write strategy
- * @name:      short name printed in the report
- * @path:      scratch file the strategy writes to
- * @needs_buf: non-zero if @run uses the user-space buffer (enables -b)
- * @run:       write @n entries of ENTRY_SIZE bytes from @data to @fd
- *
- * Only @run is timed. @buf and @bufsize are valid only if @needs_buf is set.
- */
+// Description of one write strategy:
+//   name:      name printed in the report
+//   path:      temporary file where the data is written
+//   needs_buf: 1 if run() uses the user-space buffer (enables the -b option)
+//   run:       writes n entries of ENTRY_SIZE bytes from data to fd
+//
+// Only run() is timed. buf and bufsize are only valid if needs_buf is set.
 struct bench_test
 {
 	const char *name;

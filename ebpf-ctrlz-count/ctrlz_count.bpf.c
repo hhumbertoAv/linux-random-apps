@@ -3,7 +3,7 @@
 
 #include "vmlinux.h"          // Generated kernel type universe (BTF -> C structs).
 #include <bpf/bpf_helpers.h>  // eBPF helper defs + SEC() macro magic.
-#include <bpf/bpf_core_read.h>// CO-RE reads: “read fields safely across kernel versions”.
+#include <bpf/bpf_core_read.h>// CO-RE reads: "read fields safely across kernel versions".
 
 // A tiny counter map:
 struct
@@ -12,7 +12,7 @@ struct
     __uint(max_entries, 1);   // one element: index 0
     __type(key, __u32);       // key type
     __type(value, __u64);     // value type
-} counter SEC(".maps");       // tell the loader: “this is a BPF map”
+} counter SEC(".maps");       // tell the loader: "this is a BPF map"
 
 // The HOOK: Attach this program to the tracepoint "signal:signal_generate".
 // Translation: run this function in kernel context every time the kernel generates a signal.

@@ -33,12 +33,9 @@ static void *worker(void *arg)
 
     param.sched_priority = RT_PRIORITY;
 
-    /*
-     * pthread_setschedparam() returns an error number directly (0 on
-     * success), it does not use errno. Without CAP_SYS_NICE it fails
-     * with EPERM; say so and carry on under SCHED_OTHER rather than
-     * pretending we got the real-time policy we asked for.
-     */
+    // pthread_setschedparam() returns the error number directly (0 means
+    // OK), it does not use errno. Without CAP_SYS_NICE it fails with EPERM.
+    // In that case we print a warning and continue with SCHED_OTHER.
     rc = pthread_setschedparam(pthread_self(), SCHED_FIFO, &param);
     if (rc != 0)
         fprintf(stderr,

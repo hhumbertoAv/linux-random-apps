@@ -14,12 +14,12 @@ $(PROGS): %: %.o bench.o
 %.o: %.c bench.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-# Run both under the same conditions, one after the other.
+# Run both programs, one after the other.
 run: $(PROGS)
 	./write_unbuf $(N)
 	./write_buf $(N)
 
-# Count write() calls from outside; a single repetition keeps it readable.
+# Count the write() calls with strace (only 1 repetition, so the output is short).
 strace: $(PROGS)
 	strace -c -e trace=write ./write_unbuf -r 1 $(N)
 	strace -c -e trace=write ./write_buf -r 1 $(N)

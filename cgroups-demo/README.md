@@ -1,12 +1,13 @@
 # cgroups-demo
 
-Put a CPU-bound process under a cgroup v2 and watch the kernel enforce
-the limits. The workload is [`fibo.c`](fibo.c): a naive recursive
-Fibonacci that burns CPU forever, and optionally allocates and touches
-some memory so there is something for `memory.max` to bite on.
+This example puts a CPU-intensive process inside a cgroup v2 and shows
+how the kernel applies the CPU and memory limits. The process is
+[`fibo.c`](fibo.c): a recursive Fibonacci that runs forever. With the
+second argument (in MB) it also allocates and touches some memory, to
+test `memory.max`.
 
-Requires `gcc`, a kernel with **cgroup v2**, and **root** for every step
-that writes under `/sys/fs/cgroup`. All steps run from this directory.
+You need `gcc`, a kernel with **cgroup v2**, and **root** for the steps
+that write in `/sys/fs/cgroup`. Run all the steps from this directory.
 
 ### Step 1: Verify cgroups v2 filesystem
 
@@ -66,7 +67,27 @@ watch -n 1 "cat $CG/cpu.stat; echo; cat $CG/memory.current; echo; cat $CG/memory
 # Open your system monitor
 ```
 
-With `cpu.max` set to `50000 100000` the process should sit at roughly
-half a core, and `cpu.stat`'s `throttled_usec` should keep rising as the
-kernel parks it. `./fibo 42 32` also commits 32 MB; raise that past the
-80 MB `memory.max` to see `memory.events` count the reclaim.
+With `cpu.max` = `50000 100000` the process should use about 50% of one
+core (you can see it in the system monitor), and `throttled_usec` in
+`cpu.stat` keeps growing every time the kernel stops the process.
+
+### Step 8 (optional): Test the memory limit
+
+In step 5 fibo allocates its 32 MB before it is moved into the cgroup,
+and in cgroup v2 that memory stays charged to the old cgroup (the memory
+is not moved with the process). So to test `memory.max`, stop the first
+fibo and start a new one directly inside the cgroup, asking for more
+than the 80 MB limit:
+
+```
+kill $PID
+sudo sh -c "echo \$\$ > $CG/cgroup.procs && exec ./fibo 42 100"
+```
+
+The process can't use 100 MB with a limit of 80 MB, so if you don't
+have swap the OOM killer kills it (with swap, part of the memory goes to
+swap instead). Check the `max`, `oom` and `oom_kill` counters:
+
+```
+cat $CG/memory.events
+```

@@ -1,28 +1,29 @@
 # rt-scheduling
 
-One real-time thread per online CPU, each running under `SCHED_FIFO` at
-priority 50, and a one-line invitation to disarm the safety net that
-keeps them from freezing your machine.
+This example creates one real-time thread per online CPU. Each thread
+uses the `SCHED_FIFO` policy with priority 50.
 
-[`rt_application.c`](rt_application.c) asks the kernel how many CPUs are
-online (`sysconf(_SC_NPROCESSORS_ONLN)`), spawns that many threads, and
-has each one promote itself to `SCHED_FIFO` with `pthread_setschedparam()`.
-A `SCHED_FIFO` thread runs until it blocks or yields; nothing of equal or
-lower priority gets the CPU while it is runnable. Each worker then loops:
-compute `fib(42)` (a second or two of pure CPU), print the result, and
-`sleep(5)`. The `sleep()` is the only reason the machine stays usable —
-it is what lets everything else run in the gaps.
+[`rt_application.c`](rt_application.c) gets the number of online CPUs
+with `sysconf(_SC_NPROCESSORS_ONLN)` and creates one thread per CPU.
+Each thread changes its own policy to `SCHED_FIFO` with
+`pthread_setschedparam()`, and then runs a loop: it computes `fib(42)`
+(one or two seconds of CPU), prints the result and calls `sleep(5)`.
 
-## Build
+(remember: a `SCHED_FIFO` thread keeps the CPU until it blocks or
+yields, so threads with the same or lower priority can't run on that CPU
+in the meantime. Here the `sleep(5)` is what gives the CPU back to the
+rest of the system.)
+
+### Step 1: Compile
 
 ```
 gcc -O2 -Wall -Wextra -o rt_application rt_application.c -lpthread
 ```
 
-## Run
+### Step 2: Run it as root
 
-Getting a real-time scheduling policy needs privilege (`CAP_SYS_NICE`, or
-a non-zero `RLIMIT_RTPRIO`). Run it as root:
+To use a real-time policy you need privileges (`CAP_SYS_NICE`, or a
+non-zero `RLIMIT_RTPRIO`), so run it with sudo:
 
 ```
 sudo ./rt_application
@@ -30,28 +31,43 @@ sudo ./rt_application
 
 Stop it with **Ctrl+C**.
 
-Without privilege `pthread_setschedparam()` fails with `EPERM`. The
-threads notice (it returns an error number directly, not via `errno`),
-print a warning, and keep running under the ordinary `SCHED_OTHER`
-policy — so you still get output, just without the real-time behaviour.
+If you run it without sudo, `pthread_setschedparam()` fails with
+`EPERM`. The threads print a warning and keep running with the normal
+`SCHED_OTHER` policy, so you still see the output, but without real-time
+scheduling.
 
-## The footgun
+### Step 3 (for fun): Disable the RT throttling
 
-The comment at the top of the file says:
+The comment at the top of `rt_application.c` says:
 
 ```
 Try setting the /proc/sys/kernel/sched_rt_runtime_us file to -1 for fun :)
 ```
 
-By default the kernel refuses to let real-time tasks monopolise the CPU:
-out of every `sched_rt_period_us` (1,000,000 µs) it reserves at most
-`sched_rt_runtime_us` (950,000 µs, i.e. 95%) for `SCHED_FIFO`/`SCHED_RR`,
-leaving a 5% sliver for everything else. That sliver is your way back in.
+By default the kernel doesn't let real-time tasks use 100% of the CPU.
+In every `sched_rt_period_us` (1000000 us = 1 s), real-time tasks can
+use at most `sched_rt_runtime_us` (950000 us = 95%). The other 5% is for
+the normal tasks, like your shell.
 
-Set `sched_rt_runtime_us` to `-1` and the throttle is gone. These
-particular threads `sleep(5)` between bursts, so they yield the CPU on
-their own and the box survives. Remove the sleep (or raise the priority
-and spin) with the throttle disabled and a runaway `SCHED_FIFO` thread
-can take a core and never give it back — including from the very shell
-you would use to kill it. Try it in a VM you can hard-reset, not on
-anything you care about.
+```
+cat /proc/sys/kernel/sched_rt_period_us   #expected 1000000
+cat /proc/sys/kernel/sched_rt_runtime_us  #expected 950000
+```
+
+With `-1` this limit is removed:
+
+```
+echo -1 | sudo tee /proc/sys/kernel/sched_rt_runtime_us
+```
+
+With this program nothing bad happens, because the threads call
+`sleep(5)` and give the CPU back. But if you remove the `sleep()`, there
+is one thread per core that never stops, so they can take all the cores
+and the system freezes (even the shell that you would use to kill them).
+Do this only in a VM that you can reset!!!
+
+To go back to the default value:
+
+```
+echo 950000 | sudo tee /proc/sys/kernel/sched_rt_runtime_us
+```

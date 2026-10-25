@@ -1,25 +1,23 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Humberto VALERA
-/*
- * bench.c - timing and reporting harness for the write() benchmarks.
- *
- * Only the write phase is timed. Data generation, open() and close() are
- * kept out of the measurement: both programs pay for them exactly the
- * same, so all they would add is noise. The one thing allowed to differ
- * between the two programs is how they call write().
- *
- * fsync() is never called, and that is deliberate. write() to a regular
- * file does not touch the disk. It copies the data into the page cache,
- * marks the pages dirty and returns; writeback happens later, on the
- * kernel's schedule, not ours. So what we measure is the price of going
- * in and out of the kernel plus that one copy, which is the whole point.
- * Throw in an fsync() and you are benchmarking your SSD instead.
- *
- * The flip side is that the page cache, the rest of the system and the
- * CPU frequency governor all leak into the numbers. That is why every
- * test is repeated and averaged. Don't trust a single run, and don't
- * trust a busy machine.
- */
+
+// bench.c: timing and report code for the write() benchmarks.
+//
+// Only the write phase is timed. The data generation, open() and close()
+// are not measured, because they are the same for both programs and they
+// would only add noise. The only difference between the two programs is
+// how they call write().
+//
+// We never call fsync(), on purpose. A write() to a regular file doesn't
+// go to the disk: the kernel copies the data into the page cache, marks
+// the pages as dirty and returns. The data goes to the disk later
+// (writeback), when the kernel decides. So here we measure the cost of
+// entering and leaving the kernel plus that copy, and that is what we
+// want. With an fsync() we would be measuring the disk instead.
+//
+// The problem is that the page cache, the other processes and the CPU
+// frequency also change the numbers. That's why each test is repeated and
+// we print the mean. Don't trust a single run, or a run on a busy machine.
 
 #include <errno.h>
 #include <fcntl.h>
@@ -34,12 +32,12 @@
 
 #include "bench.h"
 
-/* Summed over all repetitions, divided by their count when printed. */
+// Times added up over all the repetitions (divided by reps when printed).
 struct result
 {
-	double real_ms;		/* elapsed wall-clock time */
-	double user_ms;		/* CPU time in user mode */
-	double sys_ms;		/* CPU time in kernel mode */
+	double real_ms;		// wall-clock time
+	double user_ms;		// CPU time in user mode
+	double sys_ms;		// CPU time in kernel mode
 };
 
 void die(const char *msg)
@@ -58,23 +56,18 @@ static double tv_ms(const struct timeval *t)
 	return t->tv_sec * 1e3 + t->tv_usec / 1e3;
 }
 
-/**
- * write_all - write() until the whole buffer is out, or die trying
- * @fd:  destination
- * @p:   data to write
- * @len: number of bytes
- *
- * write() is allowed to write less than you asked for. It returns how
- * many bytes it actually took, and coming back for the rest is *your*
- * job, not the kernel's. Code that ignores this works for years on
- * regular files, then silently loses data the first time it meets a
- * pipe, a socket or a full disk.
- *
- * So: loop on short writes, restart on EINTR, die on anything else.
- * Every trip around the loop is one more write() system call, and
- * strace -c counts every one of them. Compare with the bare write() in
- * write_unbuf.c, which has no loop and therefore no second chances.
- */
+// write_all(): call write() until the whole buffer is written, or die.
+//
+// write() can write fewer bytes than we asked for (a "short write"). It
+// returns the number of bytes it really wrote, and the program has to call
+// it again for the rest, the kernel doesn't do it for us. Code that
+// ignores this usually works fine with regular files, but it can lose data
+// with a pipe, a socket or a full disk.
+//
+// So: if the write is short we loop, if we get EINTR we try again, and any
+// other error is fatal. Each loop is one more write() system call (you can
+// count them with strace -c). Compare it with write_unbuf.c, which calls
+// write() only once per entry and has no loop.
 void write_all(int fd, const char *p, size_t len)
 {
 	while (len > 0)
@@ -90,12 +83,10 @@ void write_all(int fd, const char *p, size_t len)
 	}
 }
 
-/*
- * Build all N entries up front, in one contiguous block. Generating data
- * is not what we are measuring, and doing it once here means both
- * programs write byte-for-byte the same file: "entry 0000000042 ", one
- * letter repeated up to ENTRY_SIZE - 1, and a '\n'.
- */
+// Generate all the N entries at the beginning, in one block of memory.
+// Generating the data is not what we want to measure, and this way both
+// programs write exactly the same file. Each entry is "entry 0000000042 ",
+// then the same letter repeated until ENTRY_SIZE - 1, and a '\n'.
 static char *gen_data(unsigned long n)
 {
 	char *data = malloc(n * ENTRY_SIZE);
@@ -109,26 +100,22 @@ static char *gen_data(unsigned long n)
 		char *e = data + i * ENTRY_SIZE;
 		int len = snprintf(e, ENTRY_SIZE, "entry %010lu ", i);
 
-		/* This also overwrites the '\0' snprintf() left. Intended. */
+		// This also overwrites the '\0' written by snprintf(), on purpose.
 		memset(e + len, 'a' + i % 26, ENTRY_SIZE - len - 1);
 		e[ENTRY_SIZE - 1] = '\n';
 	}
 	return data;
 }
 
-/*
- * One timed run of the strategy. The timed region is test->run() and
- * nothing else.
- *
- * Wall time comes from CLOCK_MONOTONIC, because the realtime clock can be
- * stepped by NTP or by root, and a benchmark where time runs backwards
- * is not a benchmark. The user/sys split, which is what this whole
- * experiment is about, comes from getrusage().
- *
- * Don't read too much into that split for short runs, though. On most
- * kernels it is sampled at the timer tick, so a run of a few ms is
- * divided up by a handful of samples. Use a bigger N.
- */
+// One timed run of the test. Only test->run() is inside the timed part.
+//
+// The wall-clock time comes from CLOCK_MONOTONIC, because the realtime
+// clock can jump (NTP or root can change it). The user/sys split comes
+// from getrusage(), and that split is the important part of this example.
+//
+// But be careful with short runs: on most kernels the user/sys time is
+// sampled at each timer tick, so a run of a few ms only gets a few
+// samples. Use a bigger N.
 static void bench_once(const struct bench_test *test, const char *data,
 		       unsigned long n, char *buf, size_t bufsize,
 		       struct result *r)
@@ -157,10 +144,9 @@ static void bench_once(const struct bench_test *test, const char *data,
 	r->sys_ms += tv_ms(&u1.ru_stime) - tv_ms(&u0.ru_stime);
 }
 
-/*
- * Read the file back and compare it with what we meant to write. Being
- * fast is easy if you write garbage, so prove we didn't.
- */
+// Read the file again and compare it with the data we wanted to write.
+// This checks that the program really wrote the correct data, not only
+// that it was fast.
 static int verify(const char *path, const char *data, size_t len)
 {
 	char chunk[DEF_BUFSIZE];
@@ -182,7 +168,7 @@ static int verify(const char *path, const char *data, size_t len)
 		die("read");
 	close(fd);
 
-	/* n == 0 means we got all the way to EOF without a mismatch. */
+	// n == 0 means we reached EOF and all the data matched.
 	return n == 0 && off == len;
 }
 
@@ -203,7 +189,8 @@ static void usage(const char *prog, const struct bench_test *test)
 	exit(EXIT_FAILURE);
 }
 
-/* No N on the command line: ask for it. Garbage in means 0, i.e. usage. */
+// If N is not in the command line, ask for it. If the input is not a
+// number we return 0, and then bench_main() prints the usage.
 static unsigned long ask_entries(void)
 {
 	unsigned long n;
@@ -213,17 +200,12 @@ static unsigned long ask_entries(void)
 	return scanf("%lu", &n) == 1 ? n : 0;
 }
 
-/**
- * bench_main - parse options, run a write strategy and print its timings
- * @argc: from main()
- * @argv: from main()
- * @test: strategy under test
- *
- * Prints the mean real, user and sys time of the write phase over all
- * repetitions, plus the resulting throughput.
- *
- * Return: EXIT_SUCCESS, or EXIT_FAILURE if the output file is wrong.
- */
+// bench_main(): parse the options, run the write test and print the times.
+//
+// It prints the mean real, user and sys time of the write phase over all
+// the repetitions, and the throughput.
+//
+// Returns EXIT_SUCCESS, or EXIT_FAILURE if the output file is not correct.
 int bench_main(int argc, char **argv, const struct bench_test *test)
 {
 	const char *optstr = test->needs_buf ? "b:r:h" : "r:h";
@@ -255,7 +237,7 @@ int bench_main(int argc, char **argv, const struct bench_test *test)
 		usage(argv[0], test);
 	len = n * ENTRY_SIZE;
 
-	/* Setup is not timed. */
+	// The setup is not timed.
 	data = gen_data(n);
 	if (test->needs_buf)
 	{
@@ -264,15 +246,13 @@ int bench_main(int argc, char **argv, const struct bench_test *test)
 			die("malloc");
 	}
 
-	/*
-	 * Every run gets a brand new file: unlink() it right away instead
-	 * of letting the next open(O_TRUNC) reuse it. Don't "simplify" that
-	 * away. ext4 treats open(O_TRUNC) + write() + close() as "replace
-	 * this file" and starts writeback at close() (auto_da_alloc, see
-	 * ext4(5)), so the previous run's disk I/O would bleed into the
-	 * next one. An unlinked file's dirty pages are simply thrown away
-	 * and usually never reach the disk at all.
-	 */
+	// Each run uses a new file: we call unlink() just after each run,
+	// instead of letting the next open(O_TRUNC) reuse the same file.
+	// This is important, don't remove it. ext4 treats open(O_TRUNC) +
+	// write() + close() as "replace this file" and starts the writeback
+	// at close() (auto_da_alloc, see ext4(5)), so the disk I/O of one run
+	// would affect the next one. When the file is unlinked, its dirty
+	// pages are just dropped and usually never go to the disk.
 	for (i = 0; i < reps; i++)
 	{
 		bench_once(test, data, n, buf, bufsize, &r);
@@ -287,11 +267,10 @@ int bench_main(int argc, char **argv, const struct bench_test *test)
 		unlink(test->path);
 	}
 
-	/*
-	 * real should be close to user + sys, since all of this is CPU work.
-	 * If real is way bigger, something made us wait (dirty page
-	 * throttling, another task on our CPU) and the run is suspect.
-	 */
+	// real should be close to user + sys, because all this is CPU work.
+	// If real is much bigger, the program had to wait for something
+	// (dirty page throttling, another process on the same CPU) and the
+	// result is not reliable.
 	printf("%s: %lu entries, mean of %d runs\n", test->name, n, reps);
 	if (test->needs_buf)
 		printf("  buffer      %10zu bytes\n", bufsize);

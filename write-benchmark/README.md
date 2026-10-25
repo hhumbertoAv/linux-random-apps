@@ -1,136 +1,134 @@
-write() system call benchmark
-=============================
+# write-benchmark
 
-Two tiny programs that write the same N fixed-size entries (64 bytes
-each) to a file, in two different ways:
+This example measures the cost of the `write()` system call. Two small
+programs write the same N entries (64 bytes each) to a file, in two
+different ways:
 
-  write_unbuf   one write() per entry. N entries, N system calls.
+- `write_unbuf`: one `write()` per entry. N entries = N system calls.
+- `write_buf`: the entries are copied into a user-space buffer (64 KiB
+  by default) and the whole buffer is written at once, with
+  `write_all()`. More or less N * 64 / bufsize system calls.
 
-  write_buf     entries are packed into a user-space buffer (64 KiB by
-                default) and written a whole block at a time, through
-                write_all(). Roughly N * 64 / bufsize system calls.
+Both programs use the same code to measure (`bench.c`), only the write
+phase is timed, and at the end the file is read again and checked, so we
+are sure that both programs really wrote the same data.
 
-The point is to show what a user/kernel transition costs. Both programs
-are measured by the same harness (bench.c), only the write phase is
-timed, and the output file is read back and checked, so neither of them
-can win by cheating.
+You only need `gcc` and `make`.
 
+### Step 1: Compile
 
-BUILDING
---------
+```
+make
+```
 
-You need gcc and make. That's it.
+`make clean` removes the binaries, the objects and the `*.tmp` files.
 
-	make
+### Step 2: Run
 
-	make clean	# binaries, objects and any leftover *.tmp files
+```
+./write_unbuf [-r reps] [N]
+./write_buf [-b bytes] [-r reps] [N]
+```
 
+- `N`: number of entries to write (if you don't give it, the program
+  asks for it)
+- `-b bytes`: buffer size, only for write_buf (default 65536)
+- `-r reps`: number of repetitions for the mean (default 5)
 
-RUNNING
--------
+Or run both programs, one after the other:
 
-	./write_unbuf [-r reps] [N]
-	./write_buf [-b bytes] [-r reps] [N]
+```
+make run N=1000000
+```
 
-	N         number of entries to write (asked for if omitted)
-	-b bytes  buffer size, write_buf only (default 65536)
-	-r reps   repetitions to average over (default 5)
+Each program prints the mean of all the repetitions:
 
-Or run both, one after the other:
+- `real`: wall-clock time of the write phase
+- `user`: CPU time in user mode
+- `sys`: CPU time in kernel mode
+- `throughput`: MB/s, calculated from `real`
 
-	make run N=1000000
+Example with 1000000 entries (on your machine the numbers will be
+different):
 
-Each program prints the mean of all repetitions:
+```
+unbuffered: 1000000 entries, mean of 5 runs
+  real           504.851 ms
+  user            31.224 ms
+  sys            472.877 ms
+  throughput      126.77 MB/s
+buffered: 1000000 entries, mean of 5 runs
+  buffer           65536 bytes
+  real            23.794 ms
+  user             4.677 ms
+  sys             19.148 ms
+  throughput     2689.76 MB/s
+```
 
-	real        wall-clock time of the write phase
-	user        CPU time spent in user mode
-	sys         CPU time spent in kernel mode
-	throughput  MB/s, from real
+Look at the unbuffered case: almost all the time is `sys`. Writing 64
+bytes is very fast, what takes time is entering and leaving the kernel
+one million times.
 
-Example, 1000000 entries on one machine (yours will differ):
+### Step 3: Count the system calls with strace
 
-	unbuffered: 1000000 entries, mean of 5 runs
-	  real           504.851 ms
-	  user            31.224 ms
-	  sys            472.877 ms
-	  throughput      126.77 MB/s
-	buffered: 1000000 entries, mean of 5 runs
-	  buffer           65536 bytes
-	  real            23.794 ms
-	  user             4.677 ms
-	  sys             19.148 ms
-	  throughput     2689.76 MB/s
+```
+make strace N=10000
+```
 
-Note where the time goes in the unbuffered case: almost all of it is
-sys. Moving 64 bytes is nothing; getting in and out of the kernel a
-million times is not.
+You should see N `write()` calls for write_unbuf and about
+N * 64 / 65536 for write_buf, plus a few more for the text that the
+programs print to stdout.
 
+### Step 4 (optional): Try different buffer sizes
 
-COUNTING THE SYSTEM CALLS
--------------------------
+A bigger buffer is not always better:
 
-Don't take the programs' word for it, ask strace:
+```
+./write_buf -b 32 100000         # two write() per entry: worse than no buffer!
+./write_buf -b 4096 100000
+./write_buf -b 67108864 100000   # after some size, a bigger buffer doesn't help
+```
 
-	make strace N=10000
+### Step 5 (optional): write() vs write_all()
 
-Expect N write() calls from write_unbuf and about N * 64 / 65536 from
-write_buf, plus one more each for the report printed to stdout.
+`write()` can write fewer bytes than you asked for (a short write). You
+can force one with a file size limit of 1000 bytes. The `trap` ignores
+SIGXFSZ, so the process is not killed and `write()` returns an error
+instead:
 
+```
+(trap '' XFSZ; prlimit --fsize=1000 ./write_unbuf -r 1 100)
+(trap '' XFSZ; prlimit --fsize=1000 ./write_buf -r 1 100)
+```
 
-THINGS TO TRY
--------------
+write_unbuf checks the simple `write()` and reports the short write.
+write_buf uses `write_all()`, which calls `write()` again for the rest
+of the data and then gets the real error from the kernel (`EFBIG`). You
+can see it with `strace -e trace=write`. When they fail, both programs
+leave their temporary file, `make clean` removes it.
 
-Fewer system calls is a trade, not a free lunch:
+## Notes
 
-	./write_buf -b 32 100000	# two write()s per entry: worse than
-					# not buffering at all
-	./write_buf -b 4096 100000
-	./write_buf -b 67108864 100000	# past some point a bigger buffer
-					# buys you nothing
+- `fsync()` is never called, on purpose. A `write()` to a regular file
+  only copies the data into the page cache, the disk is not part of this
+  test. But if you write a lot of data, the kernel starts to slow down
+  the writes (dirty page throttling) and then the disk matters again.
+- The user/sys times come from `getrusage()`, and on most kernels they
+  are sampled at each timer tick. For runs of a few ms they are not
+  precise, so use a bigger N.
+- Other processes, the CPU frequency and the state of the page cache
+  also change the numbers. Run it on a quiet machine, run it more than
+  once, and if `real` is much bigger than `user + sys`, the program had
+  to wait for something and the result is not reliable.
 
-write() versus write_all(). write() may write less than you asked for
-(a short write). Force one with a 1000-byte file size limit; the trap
-keeps SIGXFSZ from simply killing the process:
+## Files
 
-	(trap '' XFSZ; prlimit --fsize=1000 ./write_unbuf -r 1 100)
-	(trap '' XFSZ; prlimit --fsize=1000 ./write_buf -r 1 100)
+- `bench.h`: interface between the common code and the programs
+- `bench.c`: options, data generation, timing, report and `write_all()`
+- `write_unbuf.c`: one `write()` per entry
+- `write_buf.c`: buffered version, written with `write_all()`
+- `Makefile`: targets `all`, `run`, `strace` and `clean`
 
-write_unbuf checks the bare write() and reports the short write.
-write_buf goes through write_all(), which comes back for the rest and
-gets the real error (EFBIG) from the kernel. Run the second one under
-strace -e trace=write to watch it happen. Both leave their scratch file
-behind when they fail; make clean gets rid of it.
+## License
 
-
-CAVEATS
--------
-
- - fsync() is never called, on purpose. write() to a regular file only
-   copies into the page cache; the disk is not part of this experiment.
-   Write enough data and dirty page throttling will drag it back in.
-
- - The user/sys split comes from getrusage(), which on most kernels is
-   sampled at the timer tick. For runs of a few milliseconds it is
-   mostly noise. Use a bigger N.
-
- - Other load, CPU frequency scaling and the state of the page cache
-   all show up in the numbers. Run on a quiet machine, run more than
-   once, and if real is much bigger than user + sys, something made
-   the program wait and the run is suspect.
-
-
-FILES
------
-
-	bench.h        interface between the harness and the programs
-	bench.c        option parsing, data generation, timing, reporting,
-	               write_all()
-	write_unbuf.c  one bare write() per entry
-	write_buf.c    buffered, flushed with write_all()
-	Makefile       all, run, strace, clean
-
-
-LICENSE
--------
-
-GPL-2.0, see the SPDX headers in the source files.
+Apache-2.0, see the SPDX headers in the source files.

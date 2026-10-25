@@ -1,18 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Humberto VALERA
-/*
- * write_unbuf.c - one write() system call per entry.
- *
- * Writing N entries costs N round trips into the kernel and back. Each
- * one moves a measly 64 bytes, so nearly all the time goes into the trip
- * itself: the mode switch (which the CPU vulnerability mitigations made
- * a lot more expensive than it used to be) plus the fixed bookkeeping
- * write() does around those 64 bytes, like looking up the file, locking
- * the inode and finding the right page in the page cache. All of that
- * is kernel work, and it shows up as sys time.
- *
- * Usage: write_unbuf [-r reps] [N]
- */
+
+// write_unbuf.c: one write() system call per entry.
+//
+// Writing N entries means N trips into the kernel and back. Each one only
+// writes 64 bytes, so almost all the time is spent in the trip itself: the
+// mode switch (more expensive now because of the mitigations for CPU
+// vulnerabilities) plus the work that write() always does around those 64
+// bytes, like finding the file, locking the inode and finding the right
+// page in the page cache. All that is kernel work, so it shows up as sys
+// time.
+//
+// Usage: write_unbuf [-r reps] [N]
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -20,29 +19,27 @@
 
 #include "bench.h"
 
-/*
- * The bare system call, no wrapper. One entry, one write(), and the loop
- * below *is* the system call count: nothing hides behind it.
- *
- * The price of calling write() directly is checking its return value
- * ourselves, and it has two ways to let you down. It can return -1 with
- * errno set, or it can return a short count, fewer bytes than we asked
- * for. write_all() in bench.c handles the short count by looping. We
- * don't: for 64 bytes going into a regular file, a short write in
- * practice means the filesystem (or RLIMIT_FSIZE) just ran out, and
- * retrying would only fetch the real error one call later. So anything
- * but a full write is fatal. No EINTR either: we install no signal
- * handlers, so there is nothing to interrupt us.
- *
- * What you must never do is call write() and ignore what it returns.
- * That is not "fast", it is a data-loss bug waiting for a full disk.
- */
+// Here we call write() directly, without any wrapper. One entry, one
+// write(), so the number of loops is the number of system calls.
+//
+// Because we call write() directly, we have to check its return value
+// ourselves. It can fail in two ways: it can return -1 (and set errno), or
+// it can return a short count (fewer bytes than we asked for). write_all()
+// in bench.c handles the short count with a loop, but here we don't: for
+// 64 bytes going to a regular file, a short write normally means that the
+// filesystem (or RLIMIT_FSIZE) is full, and if we try again we just get
+// the real error in the next call. So anything that is not a full write is
+// a fatal error. We don't check EINTR either, because we don't install any
+// signal handler, so nothing can interrupt us.
+//
+// WARN: never call write() and ignore its return value. It looks faster,
+// but you can lose data when the disk is full.
 static void run_unbuffered(int fd, const char *data, unsigned long n,
 			   char *buf, size_t bufsize)
 {
 	unsigned long i;
 
-	(void)buf;		/* no buffer: that is the whole point */
+	(void)buf;		// not used: this version has no buffer
 	(void)bufsize;
 
 	for (i = 0; i < n; i++)

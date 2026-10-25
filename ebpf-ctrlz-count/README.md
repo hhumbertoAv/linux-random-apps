@@ -1,11 +1,12 @@
 # ebpf-ctrlz-count
 
-Counts how many times the kernel generates **SIGTSTP** (typically
-triggered by **Ctrl+Z**) using the tracepoint `signal:signal_generate`.
+This example counts how many times the kernel generates **SIGTSTP**
+(typically triggered by **Ctrl+Z**) using the tracepoint
+`signal:signal_generate`.
 
-Requires `clang` (with a BPF target), `bpftool`, and a kernel built with
-BTF (`/sys/kernel/btf/vmlinux`). All steps run from this directory and
-need **root**.
+You need `clang` (with the BPF target), `bpftool` and a kernel with BTF
+(`/sys/kernel/btf/vmlinux`). Run all the steps from this directory.
+Steps 3 to 5 need **root**.
 
 ### Step 1: Generate `vmlinux.h`
 
@@ -49,5 +50,6 @@ Dumps the current value stored in the pinned counter map. Since the eBPF program
 sudo bpftool map dump pinned /sys/fs/bpf/ctrlz/counter
 ```
 
-Press **Ctrl+Z** in a terminal a few times between steps 4 and 5 to watch
-the counter climb.
+To test it, between step 4 and step 5 run something like `sleep 100`,
+press **Ctrl+Z** and then `fg`. Do it a few times and read the counter
+again: it should go up.
