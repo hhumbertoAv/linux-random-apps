@@ -1,109 +1,47 @@
 # linux-random-apps
 
-## 1. `ctrlz_count.bpf.c`
+A grab-bag of small, self-contained programs, each one poking at a
+different corner of the Linux kernel: eBPF tracing, cgroup resource
+limits, real-time scheduling, W^X memory protection and the cost of a
+system call. They exist to be read and run, not shipped — each in its
+own directory, with its own README.
 
-This example counts how many times the kernel generates **SIGTSTP** (typically triggered by **Ctrl+Z**) using the tracepoint `signal:signal_generate`.
+## Examples
 
-### Step 1: Generate `vmlinux.h`
+| Directory | What it shows | Toolchain |
+|---|---|---|
+| [`ebpf-ctrlz-count/`](ebpf-ctrlz-count/) | An eBPF program that counts **SIGTSTP** (Ctrl+Z) using the `signal:signal_generate` tracepoint, loaded and pinned with `bpftool`. | clang, bpftool |
+| [`cgroups-demo/`](cgroups-demo/) | Capping a CPU-bound process (`fibo.c`) with cgroup v2 `cpu.max` and `memory.max`, then watching it from `cpu.stat` / `memory.current`. | gcc |
+| [`rt-scheduling/`](rt-scheduling/) | `SCHED_FIFO` real-time threads, one per core, and what the `sched_rt_runtime_us` throttle is there to protect you from. | gcc, pthreads |
+| [`mmap-wxorx/`](mmap-wxorx/) | Why W^X exists: a buffer overflow redirects a function pointer into a writable **and** executable `mmap` region. A deliberate anti-pattern. | gcc |
+| [`write-benchmark/`](write-benchmark/) | The price of a system call, measured: the same data written one `write()` per entry vs. packed into a user-space buffer. | gcc, make |
 
-We include `vmlinux.h` so the eBPF program knows the kernel’s real struct/type definitions (exported via BTF) and can compile with the correct `ctx` layout (remember: `ctx` is the tracepoint event context: a pointer to the data payload for that event, e.g., it contains fields like the signal number). With that BTF type info available, CO-RE helpers like `BPF_CORE_READ()` can also adapt field accesses across kernel versions, even if struct offsets change.
+## Building
 
-```
-bpftool btf dump file /sys/kernel/btf/vmlinux format c > vmlinux.h
-```
+Each example builds on its own. In short:
 
-### Step 2: Compile the eBPF program
+```sh
+# C examples
+cd cgroups-demo   && gcc -O0 -Wall -Wextra -o fibo fibo.c
+cd rt-scheduling  && gcc -O2 -Wall -Wextra -o rt_application rt_application.c -lpthread
+cd mmap-wxorx     && gcc -O0 -Wall -Wextra -o mmap_wxorx mmap_wxorx.c
 
-Compile the BPF C source into an object file (`.o`) targeting the BPF backend.
+# benchmark (has a Makefile)
+cd write-benchmark && make
 
-```
-clang -O2 -g -target bpf -c ctrlz_count.bpf.c -o ctrlz_count.bpf.o
-```
-
-### Step 3: Prepare a pin directory in bpffs
-
-Create a fresh directory under `/sys/fs/bpf/` to store the pinned eBPF objects (the attached program/link and its maps), so they stay loaded and you can access them later by their filesystem paths.
-When the program runs, it updates the map: it looks up the counter at key 0 and increments it by 1. (It’s not a normal on-disk file, but an in-memory handle to an object living in the kernel.)
-
-```
-sudo rm -rf /sys/fs/bpf/ctrlz
-sudo mkdir -p /sys/fs/bpf/ctrlz
-```
-
-### Step 4: Load, auto-attach to the tracepoint, and pin the maps
-
-Load the program into the kernel, let bpftool auto-attach it to the tracepoint declared in the ELF section (SEC("tracepoint/...")), and then pin the resulting link plus all the program’s maps under /sys/fs/bpf/ctrlz so they stay persistent and can be inspected later by path (e.g., dumping the counter map).
-
-```
-sudo bpftool prog load ctrlz_count.bpf.o /sys/fs/bpf/ctrlz/ctrlz_link autoattach pinmaps /sys/fs/bpf/ctrlz
+# eBPF (needs clang + a vmlinux.h from your running kernel)
+cd ebpf-ctrlz-count && clang -O2 -g -target bpf -c ctrlz_count.bpf.c -o ctrlz_count.bpf.o
 ```
 
-### Step 5: Read the counter
+Several examples poke at kernel state and need **root** (the cgroup and
+eBPF ones in particular) and a reasonably recent kernel with cgroup v2
+and BTF. Read the per-example README before running anything as root.
 
-Dumps the current value stored in the pinned counter map. Since the eBPF program increments it each time it sees SIGTSTP, this number is the total SIGTSTP events counted since the map was created.
+## License
 
-```
-sudo bpftool map dump pinned /sys/fs/bpf/ctrlz/counter
-```
+Apache-2.0, © 2026 Humberto VALERA (see [`LICENSE`](LICENSE)).
 
-## 2. `cgroup example`
-
-
-### Step 1: Verify cgroups v2 filesystem
-
-```
-stat -fc %T /sys/fs/cgroup #expected cgroup2fs
-
-```
-
-### Step 2: Create a new demo cgroup:
-
-```
-CG=/sys/fs/cgroup/os-demo
-sudo mkdir -p $CG
-```
-
-### Step 3: Enable CPU and memory controllers in the parent cgroup
-
-```
-# Ask the current cgroup: "which resource controllers are available here?"
-cat /sys/fs/cgroup/cgroup.controllers
-
-# If not already done, tell the parent cgroup: "enable CPU and memory control for my children"
-echo "+cpu +memory" | sudo tee /sys/fs/cgroup/cgroup.subtree_control
-```
-
-### Step 4: Set CPU and memory limits for the new cgroup
-
-```
-# Limit the cgroup to 50% of one CPU core
-echo "50000 100000" | sudo tee $CG/cpu.max
-
-# Limit memory usage to 80 MB
-echo "80M" | sudo tee $CG/memory.max
-```
-
-### Step 5: Compile, run and get the PID of the fibo.c application
-
-```
-gcc -O0 -Wall -Wextra -o fibo fibo.c
-./fibo 42 32 &
-
-PID=$!
-```
-
-### Step 6: Move the running process into the cgroup
-
-```
-echo $PID | sudo tee $CG/cgroup.procs
-```
-
-### Step 7: Verify
-
-```
-cat /proc/$PID/cgroup #Expected: 0::/os-demo
-cat $CG/cgroup.procs
-watch -n 1 "cat $CG/cpu.stat; echo; cat $CG/memory.current; echo; cat $CG/memory.events"
-# Open your system monitor
-```
-
+`ebpf-ctrlz-count/` stays GPL-2.0: an eBPF program that uses GPL-only
+kernel helpers (here `bpf_probe_read`, via `BPF_CORE_READ`) must declare
+a GPL-compatible license to the kernel, so Apache-2.0 would be
+inconsistent for that one file.

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0
+// Copyright (c) 2026 Humberto VALERA
+
 #include "vmlinux.h"          // Generated kernel type universe (BTF -> C structs).
 #include <bpf/bpf_helpers.h>  // eBPF helper defs + SEC() macro magic.
 #include <bpf/bpf_core_read.h>// CO-RE reads: “read fields safely across kernel versions”.

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Humberto VALERA
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>

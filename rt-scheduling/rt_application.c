@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Humberto VALERA
+
 //Try setting the /proc/sys/kernel/sched_rt_runtime_us file to -1 for fun :)  
 
 #define _GNU_SOURCE
@@ -30,10 +33,21 @@ static void *worker(void *arg)
 
     param.sched_priority = RT_PRIORITY;
 
+    /*
+     * pthread_setschedparam() returns an error number directly (0 on
+     * success), it does not use errno. Without CAP_SYS_NICE it fails
+     * with EPERM; say so and carry on under SCHED_OTHER rather than
+     * pretending we got the real-time policy we asked for.
+     */
     rc = pthread_setschedparam(pthread_self(), SCHED_FIFO, &param);
-
-    printf("Thread %ld running with SCHED_FIFO priority %d\n",
-           id, RT_PRIORITY);
+    if (rc != 0)
+        fprintf(stderr,
+                "Thread %ld: pthread_setschedparam: %s "
+                "(need CAP_SYS_NICE; running as SCHED_OTHER)\n",
+                id, strerror(rc));
+    else
+        printf("Thread %ld running with SCHED_FIFO priority %d\n",
+               id, RT_PRIORITY);
 
     while (1)
     {

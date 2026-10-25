@@ -1,0 +1,53 @@
+# ebpf-ctrlz-count
+
+Counts how many times the kernel generates **SIGTSTP** (typically
+triggered by **Ctrl+Z**) using the tracepoint `signal:signal_generate`.
+
+Requires `clang` (with a BPF target), `bpftool`, and a kernel built with
+BTF (`/sys/kernel/btf/vmlinux`). All steps run from this directory and
+need **root**.
+
+### Step 1: Generate `vmlinux.h`
+
+We include `vmlinux.h` so the eBPF program knows the kernel's real struct/type definitions (exported via BTF) and can compile with the correct `ctx` layout (remember: `ctx` is the tracepoint event context: a pointer to the data payload for that event, e.g., it contains fields like the signal number). With that BTF type info available, CO-RE helpers like `BPF_CORE_READ()` can also adapt field accesses across kernel versions, even if struct offsets change.
+
+```
+bpftool btf dump file /sys/kernel/btf/vmlinux format c > vmlinux.h
+```
+
+### Step 2: Compile the eBPF program
+
+Compile the BPF C source into an object file (`.o`) targeting the BPF backend.
+
+```
+clang -O2 -g -target bpf -c ctrlz_count.bpf.c -o ctrlz_count.bpf.o
+```
+
+### Step 3: Prepare a pin directory in bpffs
+
+Create a fresh directory under `/sys/fs/bpf/` to store the pinned eBPF objects (the attached program/link and its maps), so they stay loaded and you can access them later by their filesystem paths.
+When the program runs, it updates the map: it looks up the counter at key 0 and increments it by 1. (It's not a normal on-disk file, but an in-memory handle to an object living in the kernel.)
+
+```
+sudo rm -rf /sys/fs/bpf/ctrlz
+sudo mkdir -p /sys/fs/bpf/ctrlz
+```
+
+### Step 4: Load, auto-attach to the tracepoint, and pin the maps
+
+Load the program into the kernel, let bpftool auto-attach it to the tracepoint declared in the ELF section (SEC("tracepoint/...")), and then pin the resulting link plus all the program's maps under /sys/fs/bpf/ctrlz so they stay persistent and can be inspected later by path (e.g., dumping the counter map).
+
+```
+sudo bpftool prog load ctrlz_count.bpf.o /sys/fs/bpf/ctrlz/ctrlz_link autoattach pinmaps /sys/fs/bpf/ctrlz
+```
+
+### Step 5: Read the counter
+
+Dumps the current value stored in the pinned counter map. Since the eBPF program increments it each time it sees SIGTSTP, this number is the total SIGTSTP events counted since the map was created.
+
+```
+sudo bpftool map dump pinned /sys/fs/bpf/ctrlz/counter
+```
+
+Press **Ctrl+Z** in a terminal a few times between steps 4 and 5 to watch
+the counter climb.
